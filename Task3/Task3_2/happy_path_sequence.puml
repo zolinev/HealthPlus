@@ -1,0 +1,47 @@
+@startuml
+autonumber
+skinparam BoxPadding 10
+skinparam ParticipantPadding 10
+
+actor "Лаборант / Оборудование" as lab
+box "Legacy Контур" #LightGray
+    participant "LIS (Лабораторная ИС)" as lis
+end box
+
+box "Инфраструктура и Шина" #LightCyan
+    queue "RabbitMQ\n(Очередь анализов)" as rmq
+end box
+
+box "Внутренний ИТ-контур" #LightYellow
+    participant "CRM Service" as crm
+    participant "Notification" as notification
+    participant "BFF" as bff
+    participant "Gateway API" as gateway
+end box
+
+actor "Клиент" as client
+
+== Этап 1: Фиксация и отправка результата ==
+lab -> lis : Верифицирует результат исследования
+lis -> rmq : Публикует событие "Исследование готовы"
+rmq -> rmq : Запись сообщения на диск
+rmq --> lis : Передает ответ "сообщение сохранено"
+
+== Этап 2: Гарантированная обработка и дедупликация ==
+rmq -> crm : Передает событие "Исследование готово"
+crm -> crm : Проверяет дубликаты по бизнес-ключу (номер исследования)
+crm -> crm : Сохраняет результаты
+crm -> rmq : Передает событие "сообщение обработано"
+rmq -> rmq : Удаляет сообщение
+
+== Этап 3: Уведомление пользователя ==
+crm -> notification : Инициирует отправку уведомления
+notification -> client : Отправляет уведомление (push/sms/email) "Ваши анализы готовы!"
+client -> gateway : Запрашивает результаты исследования
+gateway -> bff : Запрашивает результаты исследования
+bff -> crm : Запрашивает результаты исследования
+crm -> bff : Возвращает результат исследования
+bff -> gateway : Возвращает результат исследования
+gateway -> client : Возвращает результат исследования
+
+@enduml
