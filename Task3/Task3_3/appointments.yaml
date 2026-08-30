@@ -1,0 +1,247 @@
+openapi: 3.0.3
+info:
+  title: API Мобильного приложения «Здоровье+»
+  description: Спецификация контрактов для работы с записями пациента к врачу с учетом временных интервалов приема и резервирования лаборатории.
+  version: 1.0.0
+servers:
+  - url: https://healthplus.ru/v1
+    description: Продуктивный шлюз (API Gateway)
+paths:
+  /appointments:
+    get:
+      summary: Получение списка записей пациента к врачу
+      description: Возвращает  список записей текущего авторизованного пациента напрямую из read-реплики СУБД.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Фильтр по статусу записи. Для получения предстоящих визитов передается `upcoming`.
+          schema:
+            type: string
+            enum: [upcoming, completed, canceled]
+            default: upcoming
+        - name: limit
+          in: query
+          required: false
+          description: Количество возвращаемых записей на одной странице (размер страницы).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: offset
+          in: query
+          required: false
+          description: Смещение выборки от начала списка (количество пропускаемых элементов).
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Успешное получение списка записей
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                  - pagination
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Appointment'
+                  pagination:
+                    type: object
+                    required:
+                      - total
+                      - limit
+                      - offset
+                    properties:
+                      total:
+                        type: integer
+                        description: Общее количество записей в БД, удовлетворяющих фильтру.
+                      limit:
+                        type: integer
+                        description: Возвращаемый бэкендом примененный размер страницы.
+                      offset:
+                        type: integer
+                        description: Возвращаемое бэкендом примененное смещение выборки.
+              example:
+                data:
+                  - id: "7a8f9b2d-1234-4bc3-a567-89abcdef0123"
+                    doctor_name: "Иванов Иван Иванович"
+                    specialty: "Терапевт"
+                    appointment_start: "2026-09-15T10:30:00Z"
+                    appointment_end: "2026-09-15T11:00:00Z"
+                    status: "upcoming"
+                    room: "305"
+                    lab_reservation:
+                      reservation_start: "2026-09-15T11:15:00Z"
+                      reservation_end: "2026-09-15T11:30:00Z"
+                pagination:
+                  total: 45
+                  limit: 10
+                  offset: 0
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500ServerError'
+
+    post:
+      summary: Создание новой записи к врачу
+      description: Инициирует процесс проверки полиса, холдирования средств и бронирования слотов.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Уникальный UUIDv4 транзакции для дедупликации на стороне BFF.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - slot_id
+                - doctor_id
+              properties:
+                slot_id:
+                  type: integer
+                  description: Идентификатор бронируемого временного слота
+                doctor_id:
+                  type: integer
+                  description: Идентификатор медицинского специалиста
+            example:
+              slot_id: 1542
+              doctor_id: 88
+      responses:
+        '202':
+          description: Запрос успешно принят BFF в асинхронную обработку.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - saga_id
+                  - status
+                  - message
+                properties:
+                  saga_id:
+                    type: string
+                    format: uuid
+                    description: Идентификатор для отслеживания состояния операции
+                  status:
+                    type: string
+                    description: Текущий статус распределенной транзакции
+                  message:
+                    type: string
+                    description: Текст статуса для отображения на лоадере в UI
+              example:
+                saga_id: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+                status: "PROCESSING"
+                message: "Нам нужна минутка для подтверждения резерва врача..."
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500ServerError'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    401Unauthorized:
+      description: Ошибка аутентификации (Токен не передан или невалиден)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "Unauthorized"
+            message: "Действующий JWT токен отсутствует в заголовке Authorization"
+            code: "AUTH_001"
+    500ServerError:
+      description: Внутренняя ошибка сервера
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "Internal Server Error"
+            message: "Произошла временная техническая ошибка. Код инцидента: ERR-9941"
+            code: "SYS_500"
+  schemas:
+    Appointment:
+      type: object
+      required:
+        - id
+        - doctor_name
+        - specialty
+        - appointment_start
+        - appointment_end
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Уникальный идентификатор записи
+        doctor_name:
+          type: string
+          description: ФИО медицинского специалиста
+        specialty:
+          type: string
+          description: Специализация врача
+        appointment_start:
+          type: string
+          format: date-time
+          description: Дата и время начала приема врача в формате ISO 8601 UTC
+        appointment_end:
+          type: string
+          format: date-time
+          description: Дата и время окончания приема врача в формате ISO 8601 UTC
+        status:
+          type: string
+          enum: [upcoming, completed, canceled]
+          description: Текущий статус приема
+        room:
+          type: string
+          description: Номер кабинета
+        lab_reservation:
+          $ref: '#/components/schemas/LabReservation'
+    LabReservation:
+      type: object
+      required:
+        - reservation_start
+        - reservation_end
+      properties:
+        reservation_start:
+          type: string
+          format: date-time
+          description: Дата и время начала окна для забора биоматериала в лаборатории
+        reservation_end:
+          type: string
+          format: date-time
+          description: Дата и время окончания окна для забора биоматериала в лаборатории
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+        - code
+      properties:
+        error:
+          type: string
+          description: Краткое техническое наименование ошибки
+        message:
+          type: string
+          description: Понятное пользователю описание проблемы
+        code:
+          type: string
+          description: Внутренний код бизнес-исклечения для фронтенда
