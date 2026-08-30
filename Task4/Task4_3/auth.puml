@@ -1,0 +1,23 @@
+@startuml
+autonumber
+actor "Клиент" as client
+participant "Мобильное приложение" as app
+participant "API Gateway" as gw
+participant "Identity Provider (IdP)" as idp
+participant "BFF / Микросервисы" as bff
+
+client -> app : Нажимает "Войти"
+app -> idp : Запрос авторизации
+idp -> client : Форма ввода логина/пароля + 2FA
+client -> idp : Ввод учетных данных
+
+idp --> app : Выдача JWT (Access) и Refresh токенов
+
+== Авторизованный запрос ==
+app -> gw : GET /api/v1/appointments [Header: Authorization: Bearer <JWT>]
+gw -> gw : In-memory проверка подписи JWT публичным ключом
+gw -> bff : Маршрутизация проверенного запроса (с client_id)
+bff ->bff : сравнение client_id запроса c client_id ответа
+bff --> gw : Данные JSON
+gw --> app : HTTP 200 OK
+@enduml
