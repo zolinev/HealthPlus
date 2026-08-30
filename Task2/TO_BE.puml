@@ -1,0 +1,82 @@
+@startuml
+!include <c4/C4_Container.puml>
+
+LAYOUT_WITH_LEGEND()
+
+title Диаграмма контейнеров ИТ-ландшафта «Здоровье+» (Target C4 Level 2)
+
+' АКТОРЫ
+Person(patient, "Пациент клиники", "Пользователь медицинских сервисов.")
+Person(staff, "Сотрудник клиники", "Врач, lab-инженер или администратор.")
+
+
+Container(mobile_app, "Мобильное приложение", "Kotlin/Swift / Flutter", "Новое приложение для пациентов.")
+Container(web_portal, "Веб-портал (Монолит)", "PHP / JS", "Текущий интерфейс для клиентов, врачей и администраторов клиники.")
+
+
+
+Container(api_gateway, "API Gateway", "Kong / Envoy", "Единая точка входа. Выполняет аутентификацию/авторизацию (JWT) и Rate Limiting.")
+
+
+
+Container(bff_service, "BFF Service", "Java / Spring Boot", "Реализует основую бизнес-логику. Оркестрация всех типов запросов")
+
+
+' СЛОЙ ВНУТРЕННИХ МИКРОСЕРВИСОВ И СИСТЕМ
+System_Boundary(microservices_layer, "Внутренний ИТ-контур") {
+    Container(crm_service, "CRM Service", "Java / Spring", "Ведение карточек пациентов. БД: PostgreSQL.")
+    Container(schedule_service, "Schedule Service", "Java / Spring", "Управление слотами врачей. БД: PostgreSQL.")
+    Container(notification_service, "Notification Service", "Java / Spring", "Оркестратор отправки уведомлений.")
+    Container(payment_gateway, "Внутренний платёжный шлюз", "Java / Python", "Модуль для проведения онлайн-платежей.")
+}
+
+' ИНФРАСТРУКТУРНЫЙ И ИНТЕГРАЦИОННЫЙ СЛОЙ
+System_Boundary(integration_layer, "Шина данных и Кэш") {
+    ContainerDb(redis_cache, "Distributed Cache", "Redis Cluster", "Кэширование полисов ДМС и статусов идемпотентности.")
+    Container(broker, "Брокер сообщений", "RabbitMQ (HA)", "Асинхронный транспорт для команд и событий.")
+}
+
+' LEGACY СИСТЕМЫ
+System_Boundary(legacy_layer, "Legacy Контур") {
+    Container(one_c_service, "1С: Полисы", "1С:Предприятие / HTTP-шлюз", "Учет и проверка валидности полисов ДМС.")
+    Container(lis_system, "LIS (Лабораторная ИС)")
+}
+
+' СВЯЗИ И ПОТОКИ ДАННЫХ
+
+' Входной трафик от пользователей на приложения
+Rel(patient, mobile_app, "Создает/редактирует/отменяет запись, просматривает анализы")
+Rel(staff, web_portal, "Управляет расписанием (слоты, отмены/переносы), просматривает анализы")
+Rel(patient, web_portal, "Записывается")
+
+' Весь трафик идет строго через Gateway
+Rel(mobile_app, api_gateway, "Отправляет мобильный трафик", "HTTPS")
+Rel(web_portal, api_gateway, "Отправляет веб-запросы", "HTTPS")
+
+' Gateway перенаправляет все запросы в единый BFF
+Rel(api_gateway, bff_service, "Проксирует проверенные запросы", "HTTP")
+
+' Оркестрация от единого BFF к Расписанию (Разделение Чтение / Запись)
+Rel_D(bff_service, schedule_service, "Получает свободные слоты и сетку расписания (Чтение)", "HTTP REST")
+Rel_D(bff_service, broker, "Инициирует запись на прием или изменение слота (Запись)", "AMQP")
+Rel_D(broker, schedule_service, "Применяет изменения в расписании", "AMQP")
+
+' Оркестрация от единого BFF к остальным внутренним доменам и кэшу ДМС
+Rel(bff_service, crm_service, "Запрашивает и изменяет медицинские данные", "HTTP REST")
+Rel(bff_service, redis_cache, "Проверяет лимиты ДМС", "Redis Protocol")
+
+' Внутреннее взаимодействие систем
+Rel(bff_service, payment_gateway, "Оплата (синхронно)", "REST")
+Rel( one_c_service, redis_cache, "Актуализирует данные ДМС", "HTTP")
+
+' Контур LIS
+Rel(lis_system, broker, "Публикует готовый анализ", "AMQP")
+Rel(broker, crm_service, "Сохраняет результаты анализов в карту", "AMQP")
+
+' Контур Уведомлений
+Rel(schedule_service, broker, "Генерирует событие изменения записи", "AMQP")
+Rel(crm_service, broker, "Генерирует событие готовности анализов", "AMQP")
+Rel(broker, notification_service, "Доставляет задания на отправку", "AMQP")
+Rel_U(notification_service, patient, "Отправляет уведомления (SMS, Email, Push)", "Сетевые протоколы")
+
+@enduml
