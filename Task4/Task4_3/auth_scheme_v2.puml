@@ -1,0 +1,71 @@
+@startuml
+autonumber
+skinparam BoxPadding 10
+skinparam ParticipantPadding 10
+
+actor "Клиент" as client
+participant "Мобильное приложение" as app
+participant "API Gateway" as gw
+participant "Identity Provider (IdP)" as idp
+participant "BFF / Микросервисы" as bff
+
+== Этап 1. Авторизация по стандарту OAuth 2.0 (Authorization Code Flow + PKCE) ==
+
+client -> app : Нажимает "Войти"
+activate app
+
+' Шаг PKCE: Генерация секретов на клиенте
+app -> app : Генерирует случайный случайный code_verifier \nи вычисляет его хэш: code_challenge = SHA256(code_verifier)
+
+' Запрос к IdP (уходит только хэш)
+app -> idp : Запрос авторизации (Передает: client_id, code_challenge, response_type=code)
+activate idp
+
+idp -> client : Форма ввода логина/пароля + 2FA
+client -> idp : Ввод учетных данных (логин, пароль, код 2FA)
+idp -> idp : Проверяет учетные данные и сохраняет code_challenge в памяти
+
+' Возврат временного кода
+idp --> app : Выдает временный Authorization Code
+deactivate idp
+
+' Безопасный обмен кода на токены
+app -> idp : Передает Authorization Code + исходный чистый code_verifier
+activate idp
+
+' Проверка на сервере: IdP сам хэширует verifier и сравнивает с challenge
+idp -> idp : Вычисляет SHA256(code_verifier)\nи сверяет с сохраненным code_challenge
+
+idp --> app : Выдача JWT (Access) и Refresh токенов (Проверка успешна)
+deactivate idp
+deactivate app
+
+== Этап 2. Выполнение авторизованного запроса к API ==
+
+app -> app : Подготавливает сетевой запрос
+activate app
+
+note over app, gw: **[Certificate Pinning & Chain Validation]**\nМП принудительно проверяет слепок публичного ключа шлюза.\nЕсли проверка провалена — немедленный обрыв TLS-соединения.
+
+app -> gw : Вызов API\n**[Headers: Authorization: Bearer <JWT>, request_id, session_id]**
+activate gw
+
+gw -> gw : In-memory проверка подписи JWT публичным ключом IdP
+
+' Маршрутизация с mTLS
+gw -> bff : Маршрутизация проверенного запроса (с client_id, request_id, session_id)
+activate bff
+
+note over gw, bff: **[mTLS Защита внутреннего контура]**\nШлюз, BFF и все внутренние сервисы выполняют взаимную проверку внутренних SSL-сертификатов.
+
+bff -> bff : Сравнение client_id запроса (из JWT) c client_id ответа (из БД)
+bff --> gw : Данные JSON
+deactivate bff
+
+gw --> app : Ответ
+deactivate gw
+deactivate app
+
+@enduml
+
+

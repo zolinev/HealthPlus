@@ -1,0 +1,159 @@
+openapi: 3.0.3
+info:
+  title: API Мобильного приложения «Здоровье+»
+  description: Контракт получения списка записей пациента.
+  version: 1.0.0
+servers:
+  - url: https://healthplus.ru
+    description: API Gateway
+
+security:
+  - BearerAuth: []
+
+paths:
+  /appointments:
+    get:
+      summary: Получение списка записей пациента
+      parameters:
+        - name: request_id
+          in: header
+          required: true
+          description: Обязательный уникальный идентификатор запроса (UUIDv4) для сквозного логирования
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: header
+          required: true
+          description: Обязательный идентификатор текущей сессии пользователя (UUIDv4) для аналитики и безопасности
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          required: false
+          description: Фильтр по статусу записи
+          schema:
+            type: string
+            enum: [upcoming, completed, canceled]
+            default: upcoming
+        - name: limit
+          in: query
+          required: false
+          description: Количество записей на страницу
+          schema:
+            type: integer
+            default: 10
+        - name: offset
+          in: query
+          required: false
+          description: Смещение выборки от начала списка
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Успешный ответ
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                  - pagination
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Appointment'
+                  pagination:
+                    type: object
+                    required:
+                      - total
+                      - limit
+                      - offset
+                    properties:
+                      total:
+                        type: integer
+                        description: Общее количество записей в базе данных
+                      limit:
+                        type: integer
+                        description: Примененный лимит
+                      offset:
+                        type: integer
+                        description: Примененное смещение
+              example:
+                data:
+                  - appointment_id: "7a8f9b2d-1234-4bc3-a567-89abcdef0123"
+                    doctor_id: "3c9e1a4f-5678-4bc3-b123-9876543210ab"
+                    doctor_name: "Иванов Иван Иванович"
+                    doctor_specialty: "Терапевт"
+                    appointment_start: "2026-09-15T10:30:00Z"
+                    appointment_end: "2026-09-15T11:00:00Z"
+                    status: "upcoming"
+                    clinic_id: "1b4f9e2a-3456-4bc3-c789-0123456789de"
+                    clinic_address: "г. Москва, ул. Ленина, д. 10"
+                pagination:
+                  total: 45
+                  limit: 10
+                  offset: 0
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal Server Error
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Appointment:
+      type: object
+      required:
+        - appointment_id
+        - doctor_id
+        - doctor_name
+        - doctor_specialty
+        - appointment_start
+        - appointment_end
+        - status
+        - clinic_id
+        - clinic_address
+      properties:
+        appointment_id:
+          type: string
+          format: uuid
+          description: Идентификатор записи
+        doctor_id:
+          type: string
+          format: uuid
+          description: Идентификатор врача
+        doctor_name:
+          type: string
+          description: ФИО врача
+        doctor_specialty:
+          type: string
+          description: Специальность врача
+        appointment_start:
+          type: string
+          format: date-time
+          description: Дата-время начала слота
+        appointment_end:
+          type: string
+          format: date-time
+          description: Дата-время конца слота
+        status:
+          type: string
+          description: Статус записи
+        clinic_id:
+          type: string
+          format: uuid
+          description: Идентификатор клиники
+        clinic_address:
+          type: string
+          description: Адрес клиники
