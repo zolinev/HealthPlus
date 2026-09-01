@@ -1,0 +1,108 @@
+@startuml
+autonumber
+skinparam BoxPadding 10
+skinparam ParticipantPadding 10
+
+actor "Клиент" as client
+participant "API Gateway" as gw
+participant "BFF Service" as bff
+database "Redis" as cache
+participant "Платёжный шлюз" as payment
+queue "RabbitMQ" as rmq
+participant "Schedule Service" as schedule
+participant "LIS (Лаборатория)" as lis
+participant "Notification Service" as notify
+
+== Этап 1: Синхронное Холдирование и Асинхронная бронь врача ==
+client -> gw : Нажимает в МП кнопку "Зарезервировать слот и оплатить прием врача"
+activate gw
+gw -> gw : Авторизация, RateLimit
+gw -> bff : Проксирование запроса
+
+activate bff
+bff -> cache : Проверка полиса
+activate cache
+cache --> bff : Полис подтвержден
+deactivate cache
+
+bff -> payment : Инициация оплаты
+activate payment
+payment --> bff : Успешно
+deactivate payment
+
+bff -> rmq : Публикация команды: Забронировать слот врача
+activate rmq
+rmq --> bff : Publisher Confirm (Команда в очереди)
+deactivate rmq
+
+bff --> gw : Сообщение "Успех. Бронирование врача будет в асинхронном режиме"
+gw --> client : Передача ответа
+deactivate bff
+deactivate gw
+
+note over client : На экране мобильного включается первый лоадер:\n«Нам нужна минутка для подтверждения резерва врача...»
+
+== Этап 2: Асинхронное бронирование врача ==
+rmq -> schedule : Команда: Занять слот приема
+activate schedule
+schedule -> schedule : Фиксация записи в таблице processed-commands (обеспечение идемпотености)
+schedule -> schedule : Фиксация слота в БД
+'schedule -> schedule : Фиксация записи в служебной таблице outbox (для гарантированной последующей записи в кеш)
+'schedule -> cache : Обновление Idempotency-Key 1 (Status: SUCCESS)
+schedule -> rmq : Событие: "Слот в расписании забронирован"
+
+deactivate schedule
+
+rmq -> bff : Доставка события "Слот в расписании забронирован"
+bff -> client : Пуш-нотификация / Веб-сокет: Бронь подтверждена
+
+note over client : Первый лоадер исчезает. Появляется диалоговое окно:\n«Слот врача зарезервирован! Записать вас на сдачу анализов?»
+
+== Этап 3: Пациент нажимает "ДА" ==
+client -> gw : Нажимает в МП кнопку "Зарезервировать слот в лаборатории"
+activate gw
+gw -> bff : Проксирование запроса
+activate bff
+
+
+bff -> rmq : Публикация команды: Резерв времени в LIS
+activate rmq
+rmq --> bff : Publisher Confirm (Команда в очереди)
+deactivate rmq
+bff --> gw : Сообщение "Успех. Бронирование лаборатории будет в асинхронном режиме"
+deactivate bff
+gw --> client : Передача ответа
+
+deactivate gw
+
+note over client : На экране включается второй лоадер:\n«Резервируем время для сдачи анализов...»
+
+== Этап 4: Асинхронное бронирование лаборатории ==
+rmq -> lis : Команда: Резервирование оборудования / времени
+activate lis
+'lis -> lis : Фиксация окна в ИС Лаборатории
+lis -> lis : Фиксация записи в таблице processed-commands (обеспечение идемпотености)
+lis -> lis : Фиксация слота в БД
+lis -> rmq : Событие: Время в лаборатории зарезервировано
+deactivate lis
+
+rmq -> bff : Доставка события "Время в лаборатории зарезервировано"
+activate bff
+
+
+'bff -> cache : Обновление Idempotency-Key 2 (Status: SUCCESS)
+bff -> client : Пуш-нотификация / Веб-сокет: Все этапы успешно завершены
+note over client : Лоадер исчезает. Появлется надпись \n "Вы успешно записаны к врачу и в лабораторию!
+
+== Этап 5: Уведомление клиента по почте/смс ==
+bff -> rmq : Отправить событие успешной записи к врачу и в лабораторию
+deactivate bff
+
+rmq -> notify : Задание на финальное уведомление
+
+
+
+activate notify
+notify -> client : SMS / Push: "Вы успешно записаны к врачу и в лабораторию!"
+deactivate notify
+@endif
